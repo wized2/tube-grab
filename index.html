@@ -127,6 +127,13 @@
 
 <script>
 const API_BASE = 'https://you-tube-dl-psi.vercel.app';
+// When deployed on Vercel, use our own same-origin serverless proxy (no CORS).
+// On GitHub Pages / local, there is no /api — fall back to direct + a public proxy.
+const SAME_ORIGIN_PROXY = '/api/proxy?url=';
+const IS_VERCEL = /(^|\.)vercel\.app$/.test(location.hostname);
+const PROXIES = IS_VERCEL
+  ? [SAME_ORIGIN_PROXY]
+  : ['', 'https://api.allorigins.win/raw?url='];
 let currentFormat = 'audio';
 let currentInfo = null;
 const $ = (id) => document.getElementById(id);
@@ -170,6 +177,23 @@ function loadResult(data) {
   currentInfo = data;
 }
 
+async function fetchWithProxies(target) {
+  let lastErr;
+  for (const p of PROXIES) {
+    const url = p ? p + encodeURIComponent(target) : target;
+    try {
+      const res = await fetch(url, { method: 'GET' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const txt = await res.text();
+      try { return JSON.parse(txt); }
+      catch { throw new Error('non-JSON response'); }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('all proxies failed');
+}
+
 async function fetchInfo() {
   const q = $('query').value.trim();
   if (!q) { setStatus('Enter a link or search term first.', 'error'); return; }
@@ -179,10 +203,8 @@ async function fetchInfo() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span><span>Fetching…</span>';
   try {
-    const url = `${API_BASE}/youtube?url=${encodeURIComponent(q)}&format=${currentFormat}`;
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`API HTTP ${res.status}`);
-    const json = await res.json();
+    const target = `${API_BASE}/youtube?url=${encodeURIComponent(q)}&format=${currentFormat}`;
+    const json = await fetchWithProxies(target);
     if (!json || !json.status || !json.data) throw new Error('API returned no data');
     loadResult(json.data);
     setStatus('Info fetched. Tap Download to save.', 'info');
@@ -203,7 +225,11 @@ $('downloadBtn').addEventListener('click', async () => {
     setStatus('No download link available. Fetch info first.', 'error'); return;
   }
   const dl = currentInfo.ytdl.download;
-  const proxy = `${API_BASE}/youtube/download?url=${encodeURIComponent(dl)}`;
+  const target = `${API_BASE}/youtube/download?url=${encodeURIComponent(dl)}`;
+  // Stream via our same-origin proxy on Vercel; on Pages, open the API proxy directly.
+  const proxy = IS_VERCEL
+    ? SAME_ORIGIN_PROXY + encodeURIComponent(target)
+    : target;
   const btn = $('downloadBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner" style="border-color:rgba(255,255,255,.35);border-top-color:#fff"></span><span>Preparing…</span>';
